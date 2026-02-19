@@ -32,7 +32,7 @@ class PackingEnv:
         self.bin_dims = config.bin_dims
         self.scaler = RewardScaler()
 
-    def reset(self):
+    def reset(self, box_list):
         # sample random boxes
         self.boxes = []
         for _ in range(self.n_objects):
