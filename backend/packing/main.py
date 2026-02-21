@@ -3,17 +3,17 @@
 import torch
 from collections import deque
 
-from box import Box, Bin
-import heuristics
-from model import PointerNetPolicy, Critic
-from env import PackingEnv
-from train import train_step
+from packing.box import Box, Bin
+import packing.heuristics as heuristics
+from packing.model import PointerNetPolicy, Critic
+from packing.env import PackingEnv
+from packing.train import train_step
 import random
 import pybullet as p
 from math import sqrt
 import pybullet_data
 import time
-from config import PackingConfig
+from packing.config import PackingConfig
 import argparse
 import numpy as np
 
