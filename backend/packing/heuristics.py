@@ -1,5 +1,5 @@
 import numpy as np # pyright: ignore[reportMissingImports]
-from packing.box import Box, Bin
+from box import Box, Bin
 
 bin = Bin(4,4,5)
 
@@ -14,34 +14,92 @@ when we add a Box(2, 1, 3) (from left-top point 0,0) height map becomes:
 
 2 questions we ask: where do we want to put it and is it legal?
 '''
-def add_box(x, y, box: Box, b: Bin):
-    if not can_add_box(x, y, box, b):
+def add_box(x, y, box: Box, b: Bin, rot=0, pose_idx=0):
+    if not can_add_box(x, y, box, b, rot, pose_idx):
         return False
-    submatrix = b.height_map[y:y+box.width, x:x+box.length]
-    base_height = submatrix.max()
-    top_height = base_height + box.height
-    b.height_map[y:y + box.width, x:x + box.length] = top_height
+        
+    if hasattr(box, 'poses'):
+        pose = box.poses[pose_idx]
+        Hb_raw = pose['Hb']
+        Ht_raw = pose['Ht']
+        rows, cols = Hb_raw.shape
+        b_length = cols
+        b_width = rows
+        box_width = b_width if rot % 2 == 0 else b_length
+        box_length = b_length if rot % 2 == 0 else b_width
+        Hb_rot = np.rot90(Hb_raw, rot)
+        Ht_rot = np.rot90(Ht_raw, rot)
+    else:
+        box_width = box.width if rot % 2 == 0 else box.length
+        box_length = box.length if rot % 2 == 0 else box.width
+        
+    submatrix = b.height_map[y:y+box_width, x:x+box_length]
+    
+    if hasattr(box, 'poses'):
+        Z = np.max(submatrix - Hb_rot)
+        valid = (Hb_rot != np.inf)
+        new_terrain = submatrix.copy()
+        new_terrain[valid] = np.maximum(Ht_rot[valid] + Z, submatrix[valid])
+        b.height_map[y:y+box_width, x:x+box_length] = new_terrain
+        base_height = float(Z)
+    else:
+        base_height = submatrix.max()
+        top_height = base_height + box.height
+        b.height_map[y:y + box_width, x:x + box_length] = top_height
+
     b.boxes[box.name] = {
         "box": box,
         "x": x,
         "y": y,
-        "z": base_height
+        "z": base_height,
+        "rot": rot,
+        "pose_idx": pose_idx
     }
     update_access_priority(b)
     return True
 
-def can_add_box(x, y, box: Box, b: Bin):
+def can_add_box(x, y, box: Box, b: Bin, rot=0, pose_idx=0):
+    if hasattr(box, 'poses'):
+        pose = box.poses[pose_idx]
+        Hb_raw = pose['Hb']
+        rows, cols = Hb_raw.shape
+        b_length = cols
+        b_width = rows
+        box_width = b_width if rot % 2 == 0 else b_length
+        box_length = b_length if rot % 2 == 0 else b_width
+        Hb_rot = np.rot90(Hb_raw, rot)
+    else:
+        box_width = box.width if rot % 2 == 0 else box.length
+        box_length = box.length if rot % 2 == 0 else box.width
+
     if x < 0: return False
     if y< 0: return False
-    if x + box.length > b.height_map.shape[1]: return False
-    if y + box.width > b.height_map.shape[0]: return False
-    submatrix = b.height_map[y:y+box.width, x:x+box.length]
-    if np.any((submatrix + box.height) > b.height): return False
-    base_height = submatrix.max()
-    support_ratio = np.count_nonzero(submatrix == base_height) / submatrix.size
-    if support_ratio < 0.5:
-        return False
-    return True
+    if x + box_length > b.height_map.shape[1]: return False
+    if y + box_width > b.height_map.shape[0]: return False
+    submatrix = b.height_map[y:y+box_width, x:x+box_length]
+    
+    if hasattr(box, 'poses'):
+        Z = np.max(submatrix - Hb_rot)
+        
+        # We must verify if the mesh strictly exceeds the Bin height
+        pose_height = pose['height']
+        if Z + pose_height > b.height: return False
+        
+        valid = (Hb_rot != np.inf)
+        if not np.any(valid): return False
+        
+        support_mask = (submatrix - Hb_rot) >= Z - 1e-3
+        support_cells = np.count_nonzero(support_mask & valid)
+        if support_cells == 0:
+            return False
+        return True
+    else:
+        if np.any((submatrix + box.height) > b.height): return False
+        base_height = submatrix.max()
+        support_ratio = np.count_nonzero(submatrix == base_height) / submatrix.size
+        if support_ratio < 0.5:
+            return False
+        return True
 
 def update_access_priority(b: Bin):
     entries = list(b.boxes.items())
@@ -53,13 +111,39 @@ def all_pos_for_box(box: Box, b: Bin):
     rows, cols = hmap.shape
     positions = []
 
-    for y in range(rows - box.width + 1):
-        for x in range(cols - box.length + 1):
-            if can_add_box(x, y, box, b):
-                # Compute base height (for tie breaking)
-                submatrix = hmap[y:y + box.width, x:x + box.length]
-                z = submatrix.max()
-                positions.append((x, y, z))
+    if hasattr(box, 'poses'):
+        rotations = [0, 1, 2, 3]
+        pose_indices = range(len(box.poses))
+    else:
+        rotations = [0, 1] if box.length != box.width else [0]
+        pose_indices = [0]
+        
+    for p_idx in pose_indices:
+        for r in rotations:
+            if hasattr(box, 'poses'):
+                pose = box.poses[p_idx]
+                Hb_raw = pose['Hb']
+                p_rows, p_cols = Hb_raw.shape
+                b_length = p_cols
+                b_width = p_rows
+                
+                box_width = b_width if r % 2 == 0 else b_length
+                box_length = b_length if r % 2 == 0 else b_width
+                Hb_rot = np.rot90(Hb_raw, r)
+            else:
+                box_width = box.width if r % 2 == 0 else box.length
+                box_length = box.length if r % 2 == 0 else box.width
+    
+            for y in range(rows - box_width + 1):
+                for x in range(cols - box_length + 1):
+                    if can_add_box(x, y, box, b, r, p_idx):
+                        submatrix = hmap[y:y + box_width, x:x + box_length]
+                        if hasattr(box, 'poses'):
+                            Z = np.max(submatrix - Hb_rot)
+                            positions.append((x, y, Z, r, p_idx))
+                        else:
+                            Z = submatrix.max()
+                            positions.append((x, y, Z, r, p_idx))
 
     return positions
 
@@ -73,9 +157,10 @@ def place_box_with_rule(box: Box, b: Bin):
     if not candidates:
         return None
 
-    best_x, best_y, best_z = min(candidates, key=lambda p: (p[2], p[1], p[0]))
-    add_box(best_x, best_y, box, b)
-    return best_x, best_y, best_z
+    best_candidate = min(candidates, key=lambda p: (p[2], p[1], p[0]))
+    best_x, best_y, best_z, best_rot, best_pose = best_candidate
+    add_box(best_x, best_y, box, b, best_rot, best_pose)
+    return best_candidate
 
 def compute_compactness(b: Bin):
     max_height = np.max(b.height_map)

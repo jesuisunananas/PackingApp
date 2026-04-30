@@ -3,17 +3,17 @@
 import torch
 from collections import deque
 
-from packing.box import Box, Bin
-import packing.heuristics as heuristics
-from packing.model import PointerNetPolicy, Critic
-from packing.env import PackingEnv
-from packing.train import train_step
+from box import Box, Bin
+import heuristics
+from model import PointerNetPolicy, Critic
+from env import PackingEnv
+from train import train_step
 import random
 import pybullet as p
 from math import sqrt
 import pybullet_data
 import time
-from packing.config import PackingConfig
+from config import PackingConfig
 import argparse
 import numpy as np
 
@@ -126,13 +126,14 @@ def create_bin_visual(bin_dims, cell_size=0.05):
             basePosition=pos
         )
 
+    # In heuristics.py: x maps to width (W), y maps to length (L). So X goes to W, Y goes to L.
     # X walls
-    wall([wall_thickness, W/2, wall_height/2], [0.0, W/2, wall_height/2])     # at x=0
-    wall([wall_thickness, W/2, wall_height/2], [L,   W/2, wall_height/2])     # at x=L
+    wall([wall_thickness, L/2, wall_height/2], [0.0, L/2, wall_height/2])     # at x=0
+    wall([wall_thickness, L/2, wall_height/2], [W,   L/2, wall_height/2])     # at x=W
 
     # Y walls
-    wall([L/2, wall_thickness, wall_height/2], [L/2, 0.0, wall_height/2])     # at y=0
-    wall([L/2, wall_thickness, wall_height/2], [L/2, W,   wall_height/2])     # at y=W
+    wall([W/2, wall_thickness, wall_height/2], [W/2, 0.0, wall_height/2])     # at y=0
+    wall([W/2, wall_thickness, wall_height/2], [W/2, L,   wall_height/2])     # at y=L
 
 
 def compute_ray_from_mouse(mouse_x, mouse_y):
@@ -191,32 +192,96 @@ def visualize_bin_pybullet(b: Bin, cell_size=CELL_SIZE, gui=True):
         x_cell = entry["x"]
         y_cell = entry["y"]
         z_cell = entry["z"]
+        rot = entry.get("rot", 0)
+        pose_idx = entry.get("pose_idx", 0)
 
-        # Sizes in meters
-        sx = box.length * cell_size
-        sy = box.width  * cell_size
-        sz = box.height * cell_size
+        # Sizes in meters of unrotated bounding box (within the chosen pose)
+        if hasattr(box, 'poses'):
+            pose = box.poses[pose_idx]
+            b_length = pose['Hb'].shape[1]
+            b_width = pose['Hb'].shape[0]
+            sx = b_length * cell_size
+            sy = b_width * cell_size
+            sz = pose['height']
+        else:
+            b_length = box.length
+            b_width = box.width
+            sx = box.length * cell_size
+            sy = box.width * cell_size
+            sz = box.height * cell_size
+        
+        # Grid dimensions occupied
+        if hasattr(box, 'poses'):
+            grid_sx = (b_length if rot % 2 == 0 else b_width) * cell_size
+            grid_sy = (b_width if rot % 2 == 0 else b_length) * cell_size
+        else:
+            grid_sx = sx if rot % 2 == 0 else sy
+            grid_sy = sy if rot % 2 == 0 else sx
 
         # Center position in meters
-        x_center = (x_cell + box.length / 2.0) * cell_size
-        y_center = (y_cell + box.width  / 2.0) * cell_size
-        z_center = (z_cell + box.height / 2.0) * cell_size
+        x_center = x_cell * cell_size + grid_sx / 2.0
+        y_center = y_cell * cell_size + grid_sy / 2.0
+        
+        if hasattr(box, 'mesh_path'):
+            # z_cell is already in physical meters because height_map is in meters 
+            z_center = z_cell + sz / 2.0
+        else:
+            # original code assumed z_cell was an integer block count
+            z_center = z_cell * cell_size + sz / 2.0
 
         half_extents = [sx/2, sy/2, sz/2]
 
-        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-        vis = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=half_extents,
-            rgbaColor=color_from_name(name),
-        )
+        if hasattr(box, 'mesh_path'):
+            import math
+            import pybullet as p
+            
+            # The pose mesh is already transformed and bounding-box shifted mathematically.
+            # Its minimum is at (0,0,0) in local space.
+            # Shift it by its own dimensions so the center is at (0,0,0)
+            v_shift = [-sx / 2.0, -sy / 2.0, -sz / 2.0]
 
-        body_id = p.createMultiBody(
-            baseMass=0,  # static / kinematic, we already placed them
-            baseCollisionShapeIndex=col,
-            baseVisualShapeIndex=vis,
-            basePosition=[x_center, y_center, z_center],
-        )
+            vis = p.createVisualShape(
+                p.GEOM_MESH,
+                fileName=pose['mesh_path'],
+                rgbaColor=color_from_name(name),
+                visualFramePosition=v_shift,
+                # Wait, the pose mesh was exported by trimesh AFTER scale was applied natively?
+                # Yes! In mesh_to_heightmaps, we did mesh.apply_scale(0.001) BEFORE exporting.
+                # So the mesh in the file is ALREADY in meters!
+                # Therefore we do NOT need meshScale=[0.001, 0.001, 0.001] here!
+                meshScale=[1.0, 1.0, 1.0]
+            )
+
+            # np.rot90(m, rot) rotates a matrix in a way that corresponds to a CW yaw rotation in physics
+            # due to (Row, Col) mapping to (+Y, +X). So 1 rotation = -pi/2 yaw.
+            orn = p.getQuaternionFromEuler([0, 0, -rot * math.pi/2.0])
+
+            body_id = p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=-1,
+                baseVisualShapeIndex=vis,
+                basePosition=[x_center, y_center, z_center],
+                baseOrientation=orn
+            )
+        else:
+            col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+            vis = p.createVisualShape(
+                p.GEOM_BOX,
+                halfExtents=half_extents,
+                rgbaColor=color_from_name(name),
+            )
+            import math
+            # np.rot90(m, rot) rotates a matrix in a way that corresponds to a CW yaw rotation in physics
+            # due to (Row, Col) mapping to (+Y, +X). So 1 rotation = -pi/2 yaw.
+            orn = p.getQuaternionFromEuler([0, 0, -rot * math.pi/2.0])
+
+            body_id = p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=col,
+                baseVisualShapeIndex=vis,
+                basePosition=[x_center, y_center, z_center],
+                baseOrientation=orn
+            )
 
         body_to_name[body_id] = name
     

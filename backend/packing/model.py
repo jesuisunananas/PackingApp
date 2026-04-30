@@ -29,7 +29,7 @@ class Decoder(nn.Module):
         self.W2 = nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.v = nn.Linear(hidden_dim, 1, bias=False)
 
-    def forward(self, encoder_outputs, decode_steps, training=True, return_log_probs=False, return_entropy=False):
+    def forward(self, encoder_outputs, decode_steps, training=True, return_log_probs=False, return_entropy=False, target_indices=None):
         B, N, H = encoder_outputs.shape
         device = encoder_outputs.device
         mask = torch.zeros(B, N, dtype=torch.bool, device=device)
@@ -38,6 +38,7 @@ class Decoder(nn.Module):
         indices_list = []
         logp_list = []
         entropy_list = []
+        logits_list = []
         batch_indices = torch.arange(B, device=device)
         for t in range(decode_steps):
             h_t = self.gru(prev_embed, h_t)  # (B, H)
@@ -48,8 +49,13 @@ class Decoder(nn.Module):
             mask_for_logits = mask.clone()
             u = u.masked_fill(mask_for_logits, -1e9)
             probs = F.softmax(u, dim=-1)           # (B, N)
+            
+            logits_list.append(u)
 
-            if training:
+            if target_indices is not None:
+                # Teacher forcing
+                idx = target_indices[:, t]
+            elif training:
                 idx = torch.multinomial(probs, 1).squeeze(-1)  # (B,)
             else:
                 idx = probs.argmax(dim=-1)                     # (B,)
@@ -70,6 +76,7 @@ class Decoder(nn.Module):
             prev_embed = encoder_outputs[batch_indices, idx]  # (B, H)
 
         indices = torch.stack(indices_list, dim=1)  # (B, decode_steps)
+        logits = torch.stack(logits_list, dim=1)    # (B, decode_steps, N)
 
         if return_log_probs:
             log_probs = torch.stack(logp_list, dim=1)  # (B, decode_steps)
@@ -81,7 +88,7 @@ class Decoder(nn.Module):
         else:
             entropies = None
 
-        return indices, log_probs, entropies
+        return indices, logits, log_probs, entropies
         
             
 class PointerNetPolicy(nn.Module):
@@ -91,15 +98,18 @@ class PointerNetPolicy(nn.Module):
         self.decoder = Decoder(hidden_dim)
 
     def forward(self, x, training=True,
-                return_log_probs=False, return_entropy=False):
+                return_log_probs=False, return_entropy=False, target_indices=None):
         enc = self.encoder(x)
-        indices, log_probs, entropies = self.decoder(
+        indices, logits, log_probs, entropies = self.decoder(
             enc,
             decode_steps=x.size(1),
             training=training,
             return_log_probs=return_log_probs,
             return_entropy=return_entropy,
+            target_indices=target_indices
         )
+        if target_indices is not None:
+            return indices, logits
         return indices, log_probs, entropies
 
 class Critic(nn.Module):

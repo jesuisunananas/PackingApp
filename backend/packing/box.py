@@ -1,5 +1,6 @@
 import numpy as np # pyright: ignore[reportMissingImports]
 import uuid
+import mesh_utils
 
 class BigBox:
     def __init__(self, length, width, height):
@@ -62,7 +63,33 @@ class Box(BigBox):
 
 class Bin(BigBox):
     def __init__(self, length, width, height):
-        super().__init__(length, width, height) 
-        self.height_map = np.zeros((length, width), dtype=int)
+        super().__init__(length, width, height)
+        self.height_map = np.zeros((length, width), dtype=float)
         self.priority_list = []
         self.boxes = {}
+
+class MeshBox(Box):
+    def __init__(self, mesh_path, cell_size=0.05, fragility=1.0, name=None):
+        self.mesh_path = mesh_path
+        self.poses, self.mesh, self.orig_bounds = mesh_utils.mesh_to_heightmaps(mesh_path, cell_size)
+        
+        # Use pose 0 to instantiate base properties. 
+        # During placement, the heuristic overrides these mathematically.
+        pose0 = self.poses[0]
+        self.Ht = pose0['Ht']
+        self.Hb = pose0['Hb']
+        
+        rows, cols = self.Hb.shape
+        length = cols
+        width = rows
+        height = float(pose0['height'])
+
+        if height == 0:
+            height = 1.0 # fallback if flat
+        super().__init__(length, width, height, fragility, name)
+
+    @property
+    def volume(self):
+        # Integral of Ht - Hb where valid
+        valid = (self.Hb != np.inf)
+        return float(np.sum(self.Ht[valid] - self.Hb[valid]))
