@@ -2,3 +2,5 @@
 /backend/packing/.pytest_cache
 node_modules
 __pycache__
+.DS_Store
+meshes/
