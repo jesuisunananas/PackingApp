@@ -3,24 +3,30 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+import glob
 
 # Import the new Spatial Matching Network
 from model_cnn import SpatialMatchingPolicy
 
 class BCDataset(Dataset):
-    def __init__(self, data_path="bc_dataset_train.pt"):
-        print(f"Loading {data_path}...")
-        raw_episodes = torch.load(data_path)
+    def __init__(self, data_pattern="bc_dataset_train_chunk_*.pt"):
+        print(f"Loading datasets matching {data_pattern}...")
+        chungus_files = glob.glob(data_pattern)
+        print(len(chungus_files))
+        #raw_episodes = torch.load(data_path)
         
         # The new dataset format is a list of episodes.
         # Each episode is a list of transitions: (X_heightmap, X_features, y_action)
         # We need to flatten this into a single list for the DataLoader
         self.transitions = []
-        for episode in raw_episodes:
-            for transition in episode:
-                self.transitions.append(transition)
+
+        for f in chungus_files:
+            raw_episodes = torch.load(f, weights_only=False)
+            for episode in raw_episodes:
+                for transition in episode:
+                    self.transitions.append(transition)
                 
-        print(f"Loaded {len(self.transitions)} total state-action transitions from {data_path}")
+        print(f"Loaded {len(self.transitions)} total state-action transitions from {data_pattern}")
         
     def __len__(self):
         return len(self.transitions)
@@ -30,8 +36,8 @@ class BCDataset(Dataset):
 
 def train_bc():
     # Load Train and Test datasets
-    train_dataset = BCDataset("bc_dataset_train.pt")
-    test_dataset = BCDataset("bc_dataset_test.pt")
+    train_dataset = BCDataset("bc_dataset_train_chunk_*.pt")
+    test_dataset = BCDataset("bc_dataset_test_chunk_*.pt")
     
     # Batch size can be larger since we aren't dealing with sequential RNNS
     batch_size = 64
@@ -39,7 +45,7 @@ def train_bc():
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     # Hyperparameters
-    feature_dim = 7
+    feature_dim = 8
     hidden_dim = 64
     num_rotations = 4
     num_poses = 6
@@ -53,11 +59,11 @@ def train_bc():
     )
     
     # Move model to GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on device: {device}")
     policy.to(device)
     
-    optimizer = optim.Adam(policy.parameters(), lr=1e-3)
+    optimizer = optim.Adam(policy.parameters(), lr=3e-4)
     
     # Standard Cross-Entropy for 1D flattened classes
     criterion = nn.CrossEntropyLoss()
@@ -73,15 +79,15 @@ def train_bc():
         policy.train()
         total_train_loss = 0.0
         
-        for X_heightmap, X_features, y_action in train_loader:
+        for X_heightmap, X_features, y_action, reward, next_h, next_f, done in train_loader:
             X_heightmap = X_heightmap.to(device)
             X_features = X_features.to(device)
             y_action = y_action.to(device)
             
             # Normalize Object Features
-            X_mean = X_features.mean(dim=0, keepdim=True)
-            X_std = X_features.std(dim=0, keepdim=True) + 1e-6
-            X_features = (X_features - X_mean) / X_std
+            # X_mean = X_features.mean(dim=0, keepdim=True)
+            # X_std = X_features.std(dim=0, keepdim=True) + 1e-6
+            # X_features = (X_features - X_mean) / X_std
             
             optimizer.zero_grad()
             
@@ -105,6 +111,7 @@ def train_bc():
             loss = criterion(logits_flat, target_indices)
             
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
             optimizer.step()
             
             total_train_loss += loss.item()
@@ -119,15 +126,15 @@ def train_bc():
         total_samples = 0
         
         with torch.no_grad():
-            for X_heightmap, X_features, y_action in test_loader:
+            for X_heightmap, X_features, y_action, reward, next_h, next_f, done in test_loader:
                 X_heightmap = X_heightmap.to(device)
                 X_features = X_features.to(device)
                 y_action = y_action.to(device)
                 
                 # Normalize using batch statistics
-                X_mean = X_features.mean(dim=0, keepdim=True)
-                X_std = X_features.std(dim=0, keepdim=True) + 1e-6
-                X_features = (X_features - X_mean) / X_std
+                # X_mean = X_features.mean(dim=0, keepdim=True)
+                # X_std = X_features.std(dim=0, keepdim=True) + 1e-6
+                # X_features = (X_features - X_mean) / X_std
                 
                 logits = policy(X_heightmap, X_features)
                 B, R, P, L, W = logits.shape

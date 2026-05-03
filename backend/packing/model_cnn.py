@@ -19,22 +19,33 @@ class TerrainEncoder(nn.Module):
         x = heightmap.unsqueeze(1)
         return self.net(x)
 
+# class ObjectEncoder(nn.Module):
+#     def __init__(self, feature_dim=7, hidden_dim=64):
+#         super().__init__()
+#         self.net = nn.Sequential(
+#             nn.Linear(feature_dim, hidden_dim),
+#             nn.ReLU(),
+#             nn.Linear(hidden_dim, hidden_dim),
+#             nn.ReLU()
+#         )
 class ObjectEncoder(nn.Module):
-    def __init__(self, feature_dim=7, hidden_dim=64):
+    def __init__(self, feature_dim=8, hidden_dim=64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim), # <-- Let PyTorch track running stats
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim), # <-- Add here as well
             nn.ReLU()
         )
 
     def forward(self, features):
-        # features shape: (B, 7)
+        # features shape: (B, 8)
         return self.net(features)
 
 class SpatialMatchingPolicy(nn.Module):
-    def __init__(self, feature_dim=7, hidden_dim=64, num_rotations=4, num_poses=6):
+    def __init__(self, feature_dim=8, hidden_dim=64, num_rotations=4, num_poses=6):
         super().__init__()
         self.num_rotations = num_rotations
         self.num_poses = num_poses
@@ -78,7 +89,7 @@ class SpatialMatchingPolicy(nn.Module):
         return logits
 
 class SpatialCritic(nn.Module):
-    def __init__(self, feature_dim=7, hidden_dim=64):
+    def __init__(self, feature_dim=8, hidden_dim=64):
         super().__init__()
         self.terrain_enc = TerrainEncoder(hidden_dim)
         self.obj_enc = ObjectEncoder(feature_dim, hidden_dim)
@@ -101,3 +112,35 @@ class SpatialCritic(nn.Module):
         fused = torch.cat([t_pooled, o_enc], dim=1) # (B, hidden_dim * 2)
         
         return self.value_head(fused).squeeze(-1)   # (B,)
+
+class SpatialQNetwork(nn.Module):
+    def __init__(self, feature_dim=8, hidden_dim=64, num_rotations=4, num_poses=6):
+        super().__init__()
+        self.num_rotations = num_rotations
+        self.num_poses = num_poses
+        
+        # Reuse your excellent Terrain and Object encoders
+        self.terrain_enc = TerrainEncoder(hidden_dim)
+        self.obj_enc = ObjectEncoder(feature_dim, hidden_dim)
+
+        self.q_value_conv = nn.Sequential(
+            nn.Conv2d(hidden_dim * 2, hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            # Outputs Q-values for every rotation, pose, and (X,Y) coordinate
+            nn.Conv2d(hidden_dim, num_rotations * num_poses, kernel_size=1)
+        )
+
+    def forward(self, heightmap, features):
+        B, L, W = heightmap.shape
+        t_enc = self.terrain_enc(heightmap)
+        o_enc = self.obj_enc(features)
+        
+        o_enc_broadcast = o_enc.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, L, W)
+        fused = torch.cat([t_enc, o_enc_broadcast], dim=1)
+
+        q_values = self.q_value_conv(fused)
+        q_values = q_values.view(B, self.num_rotations, self.num_poses, L, W)
+        
+        return q_values

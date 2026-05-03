@@ -4,3 +4,4 @@ node_modules
 __pycache__
 .DS_Store
 meshes/
+backend/packing/bc_dataset_*.pt

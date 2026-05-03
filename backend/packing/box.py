@@ -69,9 +69,9 @@ class Bin(BigBox):
         self.boxes = {}
 
 class MeshBox(Box):
-    def __init__(self, mesh_path, cell_size=0.05, fragility=1.0, name=None):
+    def __init__(self, mesh_path, cell_size=0.05, fragility=1.0, name=None, save_mesh=False):
         self.mesh_path = mesh_path
-        self.poses, self.mesh, self.orig_bounds = mesh_utils.mesh_to_heightmaps(mesh_path, cell_size)
+        self.poses, self.mesh, self.orig_bounds = mesh_utils.mesh_to_heightmaps(mesh_path, cell_size, save_mesh)
         
         # Use pose 0 to instantiate base properties. 
         # During placement, the heuristic overrides these mathematically.

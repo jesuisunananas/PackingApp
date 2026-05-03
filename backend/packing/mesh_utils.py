@@ -3,15 +3,25 @@ import trimesh
 
 def load_and_orient_mesh(mesh_path):
     mesh = trimesh.load(mesh_path, force='mesh')
-    # The meshes exported from CAD/LiDAR are often in millimeters. 
-    # PyBullet and our cell_size=0.05 assume meters. Scale down by 1/1000.
-    mesh.apply_scale(0.001)
-    # Put its minimum bounding box corner to 0,0,0
+    
+    # --- DYNAMIC SCALING FIX ---
+    # Find the current physical size of the mesh (Length, Width, Height)
+    extents = mesh.extents
+    max_extent = np.max(extents)
+    
+    # Avoid division by zero on corrupted flat meshes
+    if max_extent > 0:
+        # Force the longest side of the object to be exactly 1.0 meter. 
+        # (You can change 1.0 to random.uniform(0.5, 1.5) if you want varied object sizes)
+        scale_factor = 1.0 / max_extent
+        mesh.apply_scale(scale_factor)
+    
+    # Shift to origin
     orig_bounds_0 = mesh.bounds[0].copy()
     mesh.apply_translation(-orig_bounds_0)
     return mesh, orig_bounds_0
 
-def mesh_to_heightmaps(mesh_path, cell_size=0.05):
+def mesh_to_heightmaps(mesh_path, cell_size=0.05, save_mesh=False):
     mesh_orig, orig_bounds = load_and_orient_mesh(mesh_path)
     poses = []
     
@@ -47,6 +57,10 @@ def mesh_to_heightmaps(mesh_path, cell_size=0.05):
         
         if cols == 0 or rows == 0:
             continue
+
+        MAX_CELLS = 1000000 
+        if (cols * rows) > MAX_CELLS:
+            raise MemoryError(f"Mesh requested {cols * rows} cells! Skipping to prevent RAM crash.")
             
         Ht = np.zeros((rows, cols))
         Hb = np.full((rows, cols), np.inf)
@@ -76,10 +90,14 @@ def mesh_to_heightmaps(mesh_path, cell_size=0.05):
             z = loc[2]
             if z < Hb[rt, c]: Hb[rt, c] = z
             
-        import uuid
-        import os
-        tmp_path = f"/tmp/packing_meshes/pose_{uuid.uuid4().hex}.obj"
-        mesh.export(tmp_path)
+        if save_mesh:
+            import uuid
+            import os
+            tmp_path = f"/tmp/packing_meshes/pose_{uuid.uuid4().hex}.obj"
+            os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+            mesh.export(tmp_path)
+        else:
+            tmp_path = None
             
         poses.append({
             'Ht': Ht,

@@ -5,7 +5,7 @@ from collections import deque
 
 from box import Box, Bin
 import heuristics
-from model import PointerNetPolicy, Critic
+from model_pointer import PointerNetPolicy, Critic
 from env import PackingEnv
 from train import train_step
 import random
