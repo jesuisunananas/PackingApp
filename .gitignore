@@ -5,3 +5,4 @@ __pycache__
 .DS_Store
 meshes/
 backend/packing/bc_dataset_*.pt
+backend/packing/policy_online_physics_ep*.pt
