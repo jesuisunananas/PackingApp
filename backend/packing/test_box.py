@@ -1,4 +1,4 @@
-import pytest #type: ignore
+import pytest
 from box import Box, Bin
 
 class TestBox:
@@ -8,7 +8,6 @@ class TestBox:
     def test_neg_box(self):
         with pytest.raises(ValueError):
             Box(1, -1, 1)
-    def 
 
 class TestBin:
     def test_zero_bin(self):

@@ -18,23 +18,17 @@ def run_demo():
         print("No meshes found in meshes/ directory.")
         return
 
-    # We use a finer cell size to get more accurate heightmaps
     cell_size = 0.05
-    
-    # Large Bin since these might be big meshes
-    # Bin dimensions are length, width, height. Let's make it 60x60 cells (3mx3m) and height large
-    # Wait, the dimensions passed to Bin are in cells!
+
     b = Bin(30, 20, 50)
-    
-    # Add meshes
+
     for i, mesh_path in enumerate(mesh_files):
         print(f"[{i+1}/{len(mesh_files)}] Processing {os.path.basename(mesh_path)}...")
         box = MeshBox(mesh_path=mesh_path, cell_size=cell_size, name=f"mesh_{i}")
-        
+
         print(f"  Shape (LxWxH cells): {box.length}x{box.width}x{box.height}")
         print(f"  Volume: {box.volume:.2f}")
-        
-        # Place the box
+
         placement = heuristics.place_box_with_rule(box, b)
         if placement:
             x, y, z, rot, pose_idx = placement

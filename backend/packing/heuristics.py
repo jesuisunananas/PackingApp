@@ -1,7 +1,5 @@
-import numpy as np # pyright: ignore[reportMissingImports]
+import numpy as np
 from box import Box, Bin
-
-bin = Bin(4,4,5)
 
 '''
 Bin(2,4,x) height map is initially:
@@ -17,7 +15,7 @@ when we add a Box(2, 1, 3) (from left-top point 0,0) height map becomes:
 def add_box(x, y, box: Box, b: Bin, rot=0, pose_idx=0):
     if not can_add_box(x, y, box, b, rot, pose_idx):
         return False
-        
+
     if hasattr(box, 'poses'):
         pose = box.poses[pose_idx]
         Hb_raw = pose['Hb']
@@ -32,9 +30,9 @@ def add_box(x, y, box: Box, b: Bin, rot=0, pose_idx=0):
     else:
         box_width = box.width if rot % 2 == 0 else box.length
         box_length = box.length if rot % 2 == 0 else box.width
-        
+
     submatrix = b.height_map[y:y+box_width, x:x+box_length]
-    
+
     if hasattr(box, 'poses'):
         Z = np.max(submatrix - Hb_rot)
         valid = (Hb_rot != np.inf)
@@ -77,17 +75,16 @@ def can_add_box(x, y, box: Box, b: Bin, rot=0, pose_idx=0):
     if x + box_length > b.height_map.shape[1]: return False
     if y + box_width > b.height_map.shape[0]: return False
     submatrix = b.height_map[y:y+box_width, x:x+box_length]
-    
+
     if hasattr(box, 'poses'):
         Z = np.max(submatrix - Hb_rot)
-        
-        # We must verify if the mesh strictly exceeds the Bin height
+
         pose_height = pose['height']
         if Z + pose_height > b.height: return False
-        
+
         valid = (Hb_rot != np.inf)
         if not np.any(valid): return False
-        
+
         support_mask = (submatrix - Hb_rot) >= Z - 1e-3
         support_cells = np.count_nonzero(support_mask & valid)
         if support_cells == 0:
@@ -117,7 +114,7 @@ def all_pos_for_box(box: Box, b: Bin):
     else:
         rotations = [0, 1] if box.length != box.width else [0]
         pose_indices = [0]
-        
+
     for p_idx in pose_indices:
         for r in rotations:
             if hasattr(box, 'poses'):
@@ -126,14 +123,14 @@ def all_pos_for_box(box: Box, b: Bin):
                 p_rows, p_cols = Hb_raw.shape
                 b_length = p_cols
                 b_width = p_rows
-                
+
                 box_width = b_width if r % 2 == 0 else b_length
                 box_length = b_length if r % 2 == 0 else b_width
                 Hb_rot = np.rot90(Hb_raw, r)
             else:
                 box_width = box.width if r % 2 == 0 else box.length
                 box_length = box.length if r % 2 == 0 else box.width
-    
+
             for y in range(rows - box_width + 1):
                 for x in range(cols - box_length + 1):
                     if can_add_box(x, y, box, b, r, p_idx):
@@ -199,27 +196,28 @@ def compute_access_cost(b: Bin):
         z_i = H - (curr_box["box"].height + curr_box["z"])
         z_norm = max(0.0, min(1.0, z_i / H))
         fragility = float(curr_box["box"].fragility)
-        frag_weight = 1.0 #+ 2.0 * (fragility - 1.0)
+        frag_weight = 1.0
         a_c += frag_weight * z_norm * p_i
     return a_c / N
-    
+
 def footprint_overlap(b1: Box, b2: Box, b: Bin):
+    if b1.name not in b.boxes or b2.name not in b.boxes:
+        return 0.0
     x_j = b.boxes[b1.name]["x"]
     y_j = b.boxes[b1.name]["y"]
     x_k = b.boxes[b2.name]["x"]
-    y_k = b.boxes[b2.name]["y"] 
+    y_k = b.boxes[b2.name]["y"]
     x_overlap = max(0, min(x_j + b1.length, x_k + b2.length) - max(x_j, x_k))
     y_overlap = max(0, min(y_j + b1.width, y_k + b2.width) - max(y_j, y_k))
     return x_overlap * y_overlap
 
-# check if b2 is stacked on b1
 def vertical_stacking(b1: Box, b2: Box, b: Bin):
     z_top = b1.height + b.boxes[b1.name]["z"]
     z_base = b.boxes[b2.name]["z"]
     return z_base >= z_top
 
 def weight_on_box(lower: Box, upper: Box, b: Bin):
-    #densityconstant of object p*volume = weight can experiment with p
+
     p = 1.0
     area_overlap = footprint_overlap(lower, upper, b)
     if area_overlap == 0.0:
@@ -227,7 +225,6 @@ def weight_on_box(lower: Box, upper: Box, b: Bin):
     area_upper = upper.length * upper.width
     fraction_on_lower = area_overlap / area_upper
     return fraction_on_lower * p * upper.volume
-
 
 def compute_fragility_penalty(b: Bin,
                               base_scaling,
@@ -244,19 +241,16 @@ def compute_fragility_penalty(b: Bin,
     if not b.boxes:
         return 0.0
 
-    # --- 1. Collect fragilities and compute "very fragile" threshold ---
     frag_list = np.array([entry["box"].fragility for entry in b.boxes.values()], dtype=float)
-    # e.g. bottom 25% are "very fragile"
+
     very_fragile_thresh = np.quantile(frag_list, fragile_quantile)
 
     penalty = 0.0
 
-    # --- 2. Loop over each "lower" box j ---
     for _, j_entry in b.boxes.items():
         j_box = j_entry["box"]
         frag_j = float(j_box.fragility)
 
-        # compute how much weight is on j_box
         load_on_box = 0.0
         for _, k_entry in b.boxes.items():
             k_box = k_entry["box"]
@@ -264,40 +258,21 @@ def compute_fragility_penalty(b: Bin,
                 continue
             load_on_box += weight_on_box(j_box, k_box, b)
 
-        # "capacity" based on fragility & volume
         capacity = alpha * frag_j * float(j_box.volume)
 
         overload = max(0.0, load_on_box - capacity)
         if overload <= 0.0:
-            # no overload => no penalty for this box
+
             continue
 
-        # --- 3. Heavier penalty if j is very fragile compared to others ---
         if frag_j <= very_fragile_thresh:
-            # Very fragile relative to set: big penalty
+
             scale = base_scaling * heavy_factor
         else:
-            # Normal box
+
             scale = base_scaling
 
         penalty += scale * overload
 
     return float(penalty)
 
-        
-
-
-# b = Box(1, 1, 5)
-# b1 = Box(1,2,2)
-# b2 = Box(2,3,1)
-# b3 = Box(2,2,2)
-# print("Initial:\n", bin.height_map)
-# placement = place_box_with_rule(b, bin)
-# print("Placement:", placement)
-# placement = place_box_with_rule(b1, bin)
-# print("Placement:", placement)
-# placement = place_box_with_rule(b2, bin)
-# print("Placement:", placement)
-# placement = place_box_with_rule(b3, bin)
-# print("Placement:", placement)
-# print("After:\n", bin.height_map)

@@ -1,0 +1,7 @@
+matplotlib==3.10.9
+modal==1.2.6
+numpy==2.4.5
+pybullet==3.2.7
+pytest==8.4.2
+torch==2.8.0
+trimesh==4.11.5

@@ -1,6 +1,6 @@
-import torch # pyright: ignore[reportMissingImports]
-import torch.nn as nn # type: ignore
-import torch.nn.functional as F # type: ignore
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class Encoder(nn.Module):
     def __init__(self, feature_dim, hidden_dim):
@@ -10,7 +10,7 @@ class Encoder(nn.Module):
             out_channels = hidden_dim,
             kernel_size = 1
         )
-    
+
     def forward(self, x):
         x = x.transpose(1, 2)
         e = self.conv(x)
@@ -33,7 +33,7 @@ class Decoder(nn.Module):
         B, N, H = encoder_outputs.shape
         device = encoder_outputs.device
         mask = torch.zeros(B, N, dtype=torch.bool, device=device)
-        prev_embed = torch.zeros(B, H, device=device) 
+        prev_embed = torch.zeros(B, H, device=device)
         h_t = torch.zeros(B, H, device=device)
         indices_list = []
         logp_list = []
@@ -41,56 +41,55 @@ class Decoder(nn.Module):
         logits_list = []
         batch_indices = torch.arange(B, device=device)
         for t in range(decode_steps):
-            h_t = self.gru(prev_embed, h_t)  # (B, H)
+            h_t = self.gru(prev_embed, h_t)
 
-            W1e = self.W1(encoder_outputs)         # (B, N, H)
-            W2h = self.W2(h_t).unsqueeze(1)        # (B, 1, H)
-            u   = self.v(torch.tanh(W1e + W2h)).squeeze(-1)  # (B, N)
+            W1e = self.W1(encoder_outputs)
+            W2h = self.W2(h_t).unsqueeze(1)
+            u   = self.v(torch.tanh(W1e + W2h)).squeeze(-1)
             mask_for_logits = mask.clone()
             u = u.masked_fill(mask_for_logits, -1e9)
-            probs = F.softmax(u, dim=-1)           # (B, N)
-            
+            probs = F.softmax(u, dim=-1)
+
             logits_list.append(u)
 
             if target_indices is not None:
-                # Teacher forcing
+
                 idx = target_indices[:, t]
             elif training:
-                idx = torch.multinomial(probs, 1).squeeze(-1)  # (B,)
+                idx = torch.multinomial(probs, 1).squeeze(-1)
             else:
-                idx = probs.argmax(dim=-1)                     # (B,)
+                idx = probs.argmax(dim=-1)
 
             indices_list.append(idx)
 
             if return_log_probs:
                 step_logp = torch.log(
                     probs.gather(1, idx.unsqueeze(1)).squeeze(1) + 1e-9
-                )  # (B,)
+                )
                 logp_list.append(step_logp)
 
             if return_entropy:
-                step_entropy = -(probs * (probs + 1e-9).log()).sum(dim=-1)  # (B,)
+                step_entropy = -(probs * (probs + 1e-9).log()).sum(dim=-1)
                 entropy_list.append(step_entropy)
 
             mask[batch_indices, idx] = True
-            prev_embed = encoder_outputs[batch_indices, idx]  # (B, H)
+            prev_embed = encoder_outputs[batch_indices, idx]
 
-        indices = torch.stack(indices_list, dim=1)  # (B, decode_steps)
-        logits = torch.stack(logits_list, dim=1)    # (B, decode_steps, N)
+        indices = torch.stack(indices_list, dim=1)
+        logits = torch.stack(logits_list, dim=1)
 
         if return_log_probs:
-            log_probs = torch.stack(logp_list, dim=1)  # (B, decode_steps)
+            log_probs = torch.stack(logp_list, dim=1)
         else:
             log_probs = None
 
         if return_entropy:
-            entropies = torch.stack(entropy_list, dim=1)  # (B, decode_steps)
+            entropies = torch.stack(entropy_list, dim=1)
         else:
             entropies = None
 
         return indices, logits, log_probs, entropies
-        
-            
+
 class PointerNetPolicy(nn.Module):
     def __init__(self, feature_dim, hidden_dim):
         super().__init__()
@@ -123,6 +122,6 @@ class Critic(nn.Module):
         )
 
     def forward(self, x):
-        e = self.encoder(x)        # (B, N, H)
-        pooled = e.mean(dim=1)     # (B, H)
-        return self.value_head(pooled).squeeze(-1)  # (B,)
+        e = self.encoder(x)
+        pooled = e.mean(dim=1)
+        return self.value_head(pooled).squeeze(-1)

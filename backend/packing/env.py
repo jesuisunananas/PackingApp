@@ -1,5 +1,5 @@
-import torch # type: ignore
-import numpy as np # type: ignore
+import torch
+import numpy as np
 from box import Box, Bin
 import heuristics
 
@@ -23,7 +23,6 @@ class RewardScaler:
         F_norm = F / (self.mean_F + self.eps)
         return A_norm, F_norm
 
-
 class PackingEnv:
     def __init__(self, n_objects, config):
         self.n_objects = n_objects
@@ -33,7 +32,7 @@ class PackingEnv:
         self.scaler = RewardScaler()
 
     def reset(self, box_list):
-        # sample random boxes
+
         if box_list:
             self.boxes = box_list
         else:
@@ -45,7 +44,6 @@ class PackingEnv:
                 frag = np.random.rand()
                 self.boxes.append(Box(L, W, H, fragility=frag))
 
-        # Build feature matrix (batch_size=1)
         X = []
         for b in self.boxes:
             X.append([
@@ -55,16 +53,15 @@ class PackingEnv:
                 b.length / self.bin_dims[0],
                 b.width  / self.bin_dims[1]
             ])
-        
+
         X = torch.tensor(X, dtype=torch.float32).unsqueeze(0)
-        return X  # shape (1, N, F)
+        return X
 
     def step(self, ordering):
         config = self.config
-        # Create an empty bin
+
         b = Bin(*self.bin_dims)
 
-        # Apply placement heuristic
         success = True
         for idx in ordering:
             box = self.boxes[int(idx)]
@@ -72,26 +69,24 @@ class PackingEnv:
             if placed is None:
                 success = False
                 break
-        
-        # Compute reward
+
         if not success:
-            return -1.0  # simple fail penalty
+            return -1.0
 
         C = heuristics.compute_compactness(b)
         P = heuristics.compute_pyramid(b)
         A = heuristics.compute_access_cost(b)
         F = heuristics.compute_fragility_penalty(
-            b, 
-            config.base_scaling, 
-            config.heavy_factor, 
-            config.fragile_quantile, 
+            b,
+            config.base_scaling,
+            config.heavy_factor,
+            config.fragile_quantile,
             config.alpha_capacity
         )
 
         self.scaler.update(A, F)
         A_norm, F_norm = self.scaler.normalize(A, F)
 
-        # Combine your metrics
         reward = C + P - self.config.lambda_access*A_norm - self.config.lambda_fragility*F_norm
-        #print(f"C={C:.3f}, P={P:.3f}, A={A:.3f}, F={F:.3f}, R={reward:.3f}")
+
         return reward
